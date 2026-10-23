@@ -1,0 +1,98 @@
+package org.localsend.localsend_app
+
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
+
+/**
+ * Streams hardware-timestamped motion sensor samples (`accelerometer`, `linear_acceleration`, `gyroscope`)
+ * over `org.localsend.localsend_app/tap_sensors_events` when requested by the Tap-to-Share recorder or detector.
+ */
+class TapSensorChannelHandler(private val context: Context) : EventChannel.StreamHandler, SensorEventListener {
+    companion object {
+        private const val CONTROL_CHANNEL = "org.localsend.localsend_app/tap_sensors_control"
+        private const val EVENT_CHANNEL = "org.localsend.localsend_app/tap_sensors_events"
+        private const val DEFAULT_SAMPLING_PERIOD_US = 5000 // 200 Hz
+    }
+
+    private var sensorManager: SensorManager? = null
+    private var eventSink: EventChannel.EventSink? = null
+    private var isListening = false
+
+    fun register(messenger: BinaryMessenger) {
+        EventChannel(messenger, EVENT_CHANNEL).setStreamHandler(this)
+        MethodChannel(messenger, CONTROL_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "stop" -> {
+                    stopListening()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        stopListening()
+        eventSink = events
+        val samplingPeriodUs = (arguments as? Map<*, *>)?.get("samplingPeriodUs") as? Int
+            ?: DEFAULT_SAMPLING_PERIOD_US
+
+        val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        sensorManager = manager
+
+        manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            manager.registerListener(this, it, samplingPeriodUs)
+        }
+        manager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let {
+            manager.registerListener(this, it, samplingPeriodUs)
+        }
+        manager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let {
+            manager.registerListener(this, it, samplingPeriodUs)
+        }
+        isListening = true
+    }
+
+    override fun onCancel(arguments: Any?) {
+        stopListening()
+    }
+
+    fun stopListening() {
+        if (isListening) {
+            sensorManager?.unregisterListener(this)
+            isListening = false
+        }
+        eventSink = null
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        val sink = eventSink ?: return
+        val typeKey = when (event.sensor.type) {
+            Sensor.TYPE_ACCELEROMETER -> "accel"
+            Sensor.TYPE_LINEAR_ACCELERATION -> "linear_accel"
+            Sensor.TYPE_GYROSCOPE -> "gyro"
+            else -> return
+        }
+        // event.timestamp is nanoseconds from the monotonic hardware clock -> convert to microseconds.
+        val timestampUs = event.timestamp / 1000L
+        sink.success(
+            mapOf(
+                "type" to typeKey,
+                "timestampUs" to timestampUs,
+                "x" to event.values[0].toDouble(),
+                "y" to event.values[1].toDouble(),
+                "z" to event.values[2].toDouble(),
+                "iosRawInG" to false,
+            )
+        )
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        // No-op
+    }
+}

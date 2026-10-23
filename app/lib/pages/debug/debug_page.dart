@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:localsend_app/pages/debug/discovery_debug_page.dart';
 import 'package:localsend_app/pages/debug/http_logs_page.dart';
 import 'package:localsend_app/pages/debug/security_debug_page.dart';
+import 'package:localsend_app/pages/debug/tap_sensor_recorder_page.dart';
 import 'package:localsend_app/provider/app_arguments_provider.dart';
 import 'package:localsend_app/provider/persistence_provider.dart';
 import 'package:localsend_app/util/shared_preferences/shared_preferences_file.dart';
@@ -76,6 +77,10 @@ class DebugPage extends StatelessWidget {
               FilledButton(
                 onPressed: () async => context.push(() => const HttpLogsPage()),
                 child: const Text('HTTP Logs'),
+              ),
+              FilledButton(
+                onPressed: () async => context.push(() => const TapSensorRecorderPage()),
+                child: const Text('Tap Sensor Recorder'),
               ),
               if (kDebugMode)
                 FilledButton(
