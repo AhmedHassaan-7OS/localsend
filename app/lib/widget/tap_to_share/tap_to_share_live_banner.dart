@@ -10,7 +10,6 @@ import 'package:localsend_app/pages/progress_page.dart';
 import 'package:localsend_app/provider/device_info_provider.dart';
 import 'package:localsend_app/provider/favorites_provider.dart';
 import 'package:localsend_app/provider/network/nearby_devices_provider.dart';
-import 'package:localsend_app/provider/network/scan_facade.dart';
 import 'package:localsend_app/provider/network/send_provider.dart';
 import 'package:localsend_app/provider/network/server/server_provider.dart';
 import 'package:localsend_app/provider/security_provider.dart';
@@ -125,7 +124,7 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
       senderPort: serverState?.port ?? settings.port,
       senderHttps: serverState?.https ?? settings.https,
       senderDeviceModel: deviceInfo.deviceModel,
-      senderVersion: defaultProtocolVersion,
+      senderVersion: protocolVersion,
       isDesktopTarget: _isDesktop,
     );
   }
@@ -225,7 +224,7 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
           }
 
           // Trigger LocalSend's Rust multicast announcement in parallel so both devices discover each other.
-          unawaited(ref.global.dispatchAsync(StartMulticastScan()));
+          ref.redux(nearbyDevicesProvider).dispatch(StartMulticastScan());
 
           final announcement = _buildLocalAnnouncement(
             impactTimestampUs: tapEvent.impactTimestampUs,
@@ -277,14 +276,14 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
   Device _registerPeerFromPacket(ReceivedUdpTapPacket packet) {
     final ann = packet.announcement;
     final peerIp = packet.senderAddress.address;
-    final peerPort = ann.senderPort ?? defaultPort;
-    final peerHttps = ann.senderHttps ?? true;
+    final peerPort = ann.senderPort;
+    final peerHttps = ann.senderHttps;
     final normalizedFp = ann.senderFingerprint.trim().toUpperCase();
 
     final device = Device(
       signalingId: null,
       ip: peerIp,
-      version: ann.senderVersion ?? defaultProtocolVersion,
+      version: ann.senderVersion,
       port: peerPort,
       https: peerHttps,
       fingerprint: ann.senderFingerprint,
@@ -305,7 +304,7 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
 
     // Register into LocalSend's Rust discovery isolate and Flutter nearbyDevicesProvider so it is immediately usable by SendProvider.
     ref.redux(parentIsolateProvider).dispatch(IsolateDiscoveryAddDeviceAction(device: device));
-    ref.redux(nearbyDevicesProvider).dispatch(RegisterDeviceAction(device));
+    unawaited(ref.redux(nearbyDevicesProvider).dispatchAsync(RegisterDeviceAction(device)));
     return device;
   }
 
@@ -408,22 +407,30 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
     if (!mounted || _executingTransfer) {
       return;
     }
-    final localFp = ref.read(securityProvider).certificateHash.trim().toUpperCase();
-    if (request.targetFingerprint.isNotEmpty && request.targetFingerprint != localFp) {
-      return;
-    }
     final transferState = ref.read(tapTransferStateMachineProvider);
-    final peerFp = transferState.peerFingerprint ?? request.senderFingerprint;
+    final peerFp = transferState.peerFingerprint ?? request.receiverFingerprint;
     final hasFiles = ref.read(selectedSendingFilesProvider).isNotEmpty;
     if (transferState.role == TapTransferRole.sender || hasFiles) {
-      final peerDevice = _resolvePeerDevice(peerFp, fallbackIp: request.senderAddress.address);
+      final peerDevice = _resolvePeerDevice(
+        peerFp,
+        fallbackIp: request.receiverAddress.address,
+        fallbackPort: request.receiverHttpPort,
+        fallbackHttps: request.receiverHttps,
+        fallbackAlias: request.receiverAlias,
+      );
       if (peerDevice != null) {
         unawaited(_executeRealSendToPeer(peerFp, peerDevice));
       }
     }
   }
 
-  Device? _resolvePeerDevice(String? peerFingerprint, {String? fallbackIp}) {
+  Device? _resolvePeerDevice(
+    String? peerFingerprint, {
+    String? fallbackIp,
+    int? fallbackPort,
+    bool? fallbackHttps,
+    String? fallbackAlias,
+  }) {
     final normalizedFp = peerFingerprint?.trim().toUpperCase();
     final nearbyDevices = ref.read(nearbyDevicesProvider).devices.values;
     if (normalizedFp != null && normalizedFp.isNotEmpty) {
@@ -447,7 +454,7 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
         return Device(
           signalingId: null,
           ip: fromFav.ip,
-          version: defaultProtocolVersion,
+          version: protocolVersion,
           port: fromFav.port,
           https: https,
           fingerprint: fromFav.fingerprint,
@@ -466,16 +473,16 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
       }
     }
     if (fallbackIp != null) {
-      final https = ref.read(settingsProvider).https;
-      final port = ref.read(settingsProvider).port;
+      final https = fallbackHttps ?? ref.read(settingsProvider).https;
+      final port = fallbackPort ?? ref.read(settingsProvider).port;
       return Device(
         signalingId: null,
         ip: fallbackIp,
-        version: defaultProtocolVersion,
+        version: protocolVersion,
         port: port,
         https: https,
         fingerprint: peerFingerprint ?? fallbackIp,
-        alias: 'Nearby Device',
+        alias: fallbackAlias ?? 'Nearby Device',
         deviceModel: null,
         deviceType: DeviceType.mobile,
         download: false,
@@ -499,7 +506,6 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
     final currentState = ref.read(tapTransferStateMachineProvider);
     final peerFp = currentState.peerFingerprint;
     final role = currentState.role;
-    final sessionKey = currentState.sessionKey ?? '';
 
     if (peerFp == null) {
       await stateMachine.confirmTransfer();
@@ -529,7 +535,7 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
         final filesMap = {
           for (final f in activeSession.files.values) f.file.id: f.file.fileName,
         };
-        // ignore: unawaited_futures
+        // ignore: use_build_context_synchronously, unawaited_futures
         Routerino.context.pushImmediately(
           () => ProgressPage(
             showAppBar: false,
@@ -544,10 +550,13 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
 
       // Otherwise notify the sender over UDP to start `sendProvider.startSession` immediately!
       if (peerDevice?.ip != null) {
+        final serverState = ref.read(serverProvider);
+        final settings = ref.read(settingsProvider);
         _udpCoordinator?.sendTriggerSend(
-          targetIp: peerDevice!.ip!,
-          targetFingerprint: peerFp,
-          sessionKey: sessionKey,
+          targetPeerIp: peerDevice!.ip!,
+          localHttpPort: serverState?.port ?? settings.port,
+          localHttps: serverState?.https ?? settings.https,
+          localAlias: serverState?.alias ?? settings.alias,
         );
       }
       stateMachine.arm(selectedFiles: _currentSelectedFilePaths());
@@ -673,7 +682,7 @@ class _TapToShareLiveBannerState extends State<TapToShareLiveBanner> with Widget
       localNonce: nonce,
     );
 
-    unawaited(ref.global.dispatchAsync(StartMulticastScan()));
+    ref.redux(nearbyDevicesProvider).dispatch(StartMulticastScan());
 
     // Broadcast over UDP so any listening Desktop/Phone on the LAN receives the simulated tap!
     final announcement = _buildLocalAnnouncement(
