@@ -8,6 +8,7 @@ import 'package:localsend_app/pages/changelog_page.dart';
 import 'package:localsend_app/pages/donation/donation_page.dart';
 import 'package:localsend_app/pages/settings/network_interfaces_page.dart';
 import 'package:localsend_app/pages/tabs/settings_tab_controller.dart';
+import 'package:localsend_app/pages/tabs/settings_tab_tap_to_share_section.dart';
 import 'package:localsend_app/provider/network/server/server_provider.dart';
 import 'package:localsend_app/provider/settings_provider.dart';
 import 'package:localsend_app/provider/version_provider.dart';
@@ -50,7 +51,9 @@ class SettingsTab extends StatelessWidget {
               padding: const EdgeInsets.only(left: 8),
               child: Text(t.settingsTab.title, style: Theme.of(context).textTheme.titleLarge, textAlign: TextAlign.center),
             ),
-            const SizedBox(height: 30),
+            const SizedBox(height: 15),
+            const TapToShareSettingsSection(),
+            const SizedBox(height: 15),
             _SettingsSection(
               title: t.settingsTab.general.title,
               children: [

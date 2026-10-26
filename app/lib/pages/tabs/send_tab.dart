@@ -29,6 +29,7 @@ import 'package:localsend_app/widget/responsive_builder.dart';
 import 'package:localsend_app/widget/responsive_list_view.dart';
 import 'package:localsend_app/widget/responsive_wrap_view.dart';
 import 'package:localsend_app/widget/rotating_widget.dart';
+import 'package:localsend_app/widget/tap_to_share/tap_to_share_live_banner.dart';
 import 'package:localsend_isolates/model/device.dart';
 import 'package:localsend_isolates/model/session_status.dart';
 import 'package:localsend_isolates/util/file_size_helper.dart';
@@ -50,10 +51,23 @@ class SendTab extends StatelessWidget {
         final sizingInformation = SizingInformation(MediaQuery.sizeOf(context).width);
         final buttonWidth = sizingInformation.isDesktop ? BigButton.desktopWidth : BigButton.mobileWidth;
         final ref = context.ref;
+        final firstPeer = vm.nearbyDevices.firstOrNull;
         return ResponsiveListView(
           padding: EdgeInsets.zero,
           children: [
             const SizedBox(height: 20),
+            TapToShareLiveBanner(
+              selectedFilePaths: vm.selectedFiles.map((f) => f.path ?? f.name).toList(),
+              knownPeerIps: vm.nearbyDevices.map((d) => d.ip).whereType<String>().toList(),
+              firstNearbyPeerFingerprint: firstPeer?.fingerprint,
+              firstNearbyPeerAlias: firstPeer?.alias,
+              onTransferConfirmed: firstPeer != null
+                  ? () {
+                      // ignore: discarded_futures
+                      vm.onTapDevice(context, firstPeer);
+                    }
+                  : null,
+            ),
             if (vm.selectedFiles.isEmpty) ...[
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: _horizontalPadding),
