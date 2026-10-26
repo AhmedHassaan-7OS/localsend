@@ -16,6 +16,7 @@ import 'package:localsend_app/widget/custom_icon_button.dart';
 import 'package:localsend_app/widget/local_send_logo.dart';
 import 'package:localsend_app/widget/responsive_list_view.dart';
 import 'package:localsend_app/widget/rotating_widget.dart';
+import 'package:localsend_app/widget/tap_to_share/tap_to_share_live_banner.dart';
 import 'package:localsend_isolates/util/sleep.dart';
 import 'package:refena_flutter/addons.dart';
 import 'package:refena_flutter/refena_flutter.dart';
@@ -102,6 +103,7 @@ class _ReceiveTabState extends State<ReceiveTab> {
                       ],
                     ),
                   ),
+                  const TapToShareLiveBanner(),
                   Padding(
                     padding: const EdgeInsets.only(top: 10),
                     child: Center(

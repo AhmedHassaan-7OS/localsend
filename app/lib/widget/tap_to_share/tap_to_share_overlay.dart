@@ -74,12 +74,14 @@ class TapToShareOverlayCard extends StatefulWidget {
   final bool reduceMotion;
   final VoidCallback? onHapticFeedback;
   final String? peerDisplayName;
+  final Future<void> Function()? onConfirmPressed;
 
   const TapToShareOverlayCard({
     super.key,
     this.reduceMotion = false,
     this.onHapticFeedback,
     this.peerDisplayName,
+    this.onConfirmPressed,
   });
 
   @override
@@ -229,7 +231,11 @@ class _TapToShareOverlayCardState extends State<TapToShareOverlayCard> with Sing
                       icon: Icons.check_circle_outline,
                       isPrimary: true,
                       onPressed: () {
-                        unawaited(controller.confirmTransfer());
+                        if (widget.onConfirmPressed != null) {
+                          unawaited(widget.onConfirmPressed!());
+                        } else {
+                          unawaited(controller.confirmTransfer());
+                        }
                       },
                     ),
                     _ActionButton(
@@ -253,6 +259,21 @@ class _TapToShareOverlayCardState extends State<TapToShareOverlayCard> with Sing
                       isPrimary: false,
                       onPressed: () {
                         unawaited(controller.cancel());
+                      },
+                    ),
+                  ],
+                )
+              else if (state.phase == TapTransferPhase.done || state.phase == TapTransferPhase.cancelled)
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _ActionButton(
+                      label: 'Dismiss',
+                      icon: Icons.check,
+                      isPrimary: false,
+                      onPressed: () {
+                        controller.arm();
                       },
                     ),
                   ],

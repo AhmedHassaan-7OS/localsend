@@ -5,13 +5,15 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.net.wifi.WifiManager
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 /**
  * Streams hardware-timestamped motion sensor samples (`accelerometer`, `linear_acceleration`, `gyroscope`)
- * over `org.localsend.localsend_app/tap_sensors_events` when requested by the Tap-to-Share recorder or detector.
+ * over `org.localsend.localsend_app/tap_sensors_events` when requested by the Tap-to-Share recorder or detector,
+ * and holds a Wi-Fi MulticastLock while active so UDP multicast/broadcast packets are never dropped by Android Wi-Fi drivers.
  */
 class TapSensorChannelHandler(private val context: Context) : EventChannel.StreamHandler, SensorEventListener {
     companion object {
@@ -21,8 +23,10 @@ class TapSensorChannelHandler(private val context: Context) : EventChannel.Strea
     }
 
     private var sensorManager: SensorManager? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
     private var eventSink: EventChannel.EventSink? = null
     private var isListening = false
+    private var hasHardwareGyro = false
 
     fun register(messenger: BinaryMessenger) {
         EventChannel(messenger, EVENT_CHANNEL).setStreamHandler(this)
@@ -43,6 +47,8 @@ class TapSensorChannelHandler(private val context: Context) : EventChannel.Strea
         val samplingPeriodUs = (arguments as? Map<*, *>)?.get("samplingPeriodUs") as? Int
             ?: DEFAULT_SAMPLING_PERIOD_US
 
+        acquireMulticastLock()
+
         val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
         sensorManager = manager
 
@@ -52,7 +58,9 @@ class TapSensorChannelHandler(private val context: Context) : EventChannel.Strea
         manager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let {
             manager.registerListener(this, it, samplingPeriodUs)
         }
-        manager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let {
+        val gyroSensor = manager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        hasHardwareGyro = gyroSensor != null
+        gyroSensor?.let {
             manager.registerListener(this, it, samplingPeriodUs)
         }
         isListening = true
@@ -67,7 +75,33 @@ class TapSensorChannelHandler(private val context: Context) : EventChannel.Strea
             sensorManager?.unregisterListener(this)
             isListening = false
         }
+        releaseMulticastLock()
         eventSink = null
+    }
+
+    private fun acquireMulticastLock() {
+        try {
+            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            if (multicastLock == null) {
+                multicastLock = wifiManager.createMulticastLock("localsend_tap_to_share").apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (multicastLock?.isHeld == false) {
+                multicastLock?.acquire()
+            }
+        } catch (_: Throwable) {
+            // Ignore if permission or Wi-Fi service is unavailable on this device.
+        }
+    }
+
+    private fun releaseMulticastLock() {
+        try {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+            }
+        } catch (_: Throwable) {
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -90,6 +124,20 @@ class TapSensorChannelHandler(private val context: Context) : EventChannel.Strea
                 "iosRawInG" to false,
             )
         )
+        // If this Android phone has no hardware gyroscope, emit a zero-gyro sample alongside accelerometer
+        // so ImpactDetector's gyro stillness checks remain satisfied.
+        if (!hasHardwareGyro && event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            sink.success(
+                mapOf(
+                    "type" to "gyro",
+                    "timestampUs" to timestampUs,
+                    "x" to 0.0,
+                    "y" to 0.0,
+                    "z" to 0.0,
+                    "iosRawInG" to false,
+                )
+            )
+        }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {

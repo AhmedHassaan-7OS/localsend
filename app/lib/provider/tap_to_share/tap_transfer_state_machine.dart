@@ -158,15 +158,38 @@ class TapTransferStateMachineController extends Notifier<TapTransferState> {
   final List<TapTransferPhase> phaseHistory = [];
 
   final Set<String> _processedSessionKeys = {};
+  final Map<String, int> _preApprovedSenderExpiryUs = {};
   Timer? _phaseTimer;
   int _activeOperationToken = 0;
 
   TapTransferStateMachineController({
     TapTransferExecutor executor = const NoOpTapTransferExecutor(),
     this.matchTimeout = const Duration(milliseconds: 1500),
-    this.confirmTimeout = const Duration(seconds: 15),
+    this.confirmTimeout = const Duration(seconds: 30),
     this.transferTimeout = const Duration(seconds: 60),
   }) : _executor = executor;
+
+  /// Pre-approves an incoming transfer from [senderFingerprint] after the user confirms a Tap-to-Share match as receiver.
+  void preApproveSenderForReceive(
+    String senderFingerprint, {
+    Duration ttl = const Duration(seconds: 45),
+  }) {
+    final normalized = senderFingerprint.trim().toUpperCase();
+    if (normalized.isEmpty) {
+      return;
+    }
+    _preApprovedSenderExpiryUs[normalized] = DateTime.now().microsecondsSinceEpoch + ttl.inMicroseconds;
+  }
+
+  /// Consumes a pre-approved sender authorization if still within its TTL window.
+  bool consumePreApprovedSender(String senderFingerprint) {
+    final normalized = senderFingerprint.trim().toUpperCase();
+    final expiryUs = _preApprovedSenderExpiryUs.remove(normalized);
+    if (expiryUs == null) {
+      return false;
+    }
+    return DateTime.now().microsecondsSinceEpoch <= expiryUs;
+  }
 
   @override
   TapTransferState init() {
@@ -276,23 +299,14 @@ class TapTransferStateMachineController extends Notifier<TapTransferState> {
     final snapshotFiles = List<String>.unmodifiable(List<String>.from(state.armedFiles));
     final localHasFiles = snapshotFiles.isNotEmpty;
 
-    if (!localHasFiles && !peerHasFiles) {
-      _transitionTo(
-        TapTransferState(
-          phase: TapTransferPhase.cancelled,
-          armedFiles: state.armedFiles,
-          lastReason: 'neither_peer_has_files',
-        ),
-      );
-      return false;
-    }
-
     final TapTransferRole role;
     if (localHasFiles && !peerHasFiles) {
       role = TapTransferRole.sender;
     } else if (!localHasFiles && peerHasFiles) {
       role = TapTransferRole.receiver;
     } else {
+      // Either both peers have files selected, or neither peer has pre-selected files yet;
+      // let the user choose whether to Send (picking files if needed) or Receive.
       role = TapTransferRole.conflict;
     }
 

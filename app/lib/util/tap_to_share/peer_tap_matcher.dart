@@ -136,6 +136,12 @@ class PeerTapAnnouncement {
   final double dirY;
   final double dirZ;
   final bool hasSelectedFiles;
+  final String? senderAlias;
+  final int senderPort;
+  final bool senderHttps;
+  final String? senderDeviceModel;
+  final String senderVersion;
+  final bool isDesktopTarget;
 
   const PeerTapAnnouncement({
     required this.senderFingerprint,
@@ -147,6 +153,12 @@ class PeerTapAnnouncement {
     required this.dirY,
     required this.dirZ,
     required this.hasSelectedFiles,
+    this.senderAlias,
+    this.senderPort = 53317,
+    this.senderHttps = true,
+    this.senderDeviceModel,
+    this.senderVersion = '2.1',
+    this.isDesktopTarget = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -159,6 +171,12 @@ class PeerTapAnnouncement {
     'dirY': dirY,
     'dirZ': dirZ,
     'hasSelectedFiles': hasSelectedFiles,
+    if (senderAlias != null) 'senderAlias': senderAlias,
+    'senderPort': senderPort,
+    'senderHttps': senderHttps,
+    if (senderDeviceModel != null) 'senderDeviceModel': senderDeviceModel,
+    'senderVersion': senderVersion,
+    'isDesktopTarget': isDesktopTarget,
   };
 
   factory PeerTapAnnouncement.fromJson(Map<String, dynamic> json) {
@@ -177,6 +195,12 @@ class PeerTapAnnouncement {
       dirY: (json['dirY'] as num?)?.toDouble() ?? 0.0,
       dirZ: (json['dirZ'] as num?)?.toDouble() ?? 0.0,
       hasSelectedFiles: json['hasSelectedFiles'] as bool? ?? false,
+      senderAlias: json['senderAlias'] as String?,
+      senderPort: (json['senderPort'] as num?)?.toInt() ?? 53317,
+      senderHttps: json['senderHttps'] as bool? ?? true,
+      senderDeviceModel: json['senderDeviceModel'] as String?,
+      senderVersion: json['senderVersion'] as String? ?? '2.1',
+      isDesktopTarget: json['isDesktopTarget'] as bool? ?? false,
     );
   }
 }

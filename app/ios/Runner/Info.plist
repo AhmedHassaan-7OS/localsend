@@ -149,6 +149,8 @@
     <string>The app requires the local IP to communicate.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>The app uses the local network to find and connect to nearby devices.</string>
+    <key>NSMotionUsageDescription</key>
+    <string>The app uses motion sensors when Tap-to-Share is enabled to detect when two devices are tapped together.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_http._tcp</string>

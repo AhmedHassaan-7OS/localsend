@@ -27,15 +27,36 @@ enum TapSensitivityPreset {
     switch (this) {
       case TapSensitivityPreset.low:
         return const ImpactDetectorConfig(
-          minPeakLinearAccelMps2: 9.5,
-          minJerkMps3: 550.0,
+          minPeakLinearAccelMps2: 8.5,
+          minJerkMps3: 400.0,
+          maxPreImpactGyroRmsRadPerSec: 4.5,
+          maxPreImpactGyroPeakRadPerSec: 9.0,
+          maxPreImpactAccelRmsMps2: 6.5,
+          maxDuringImpactGyroPeakRadPerSec: 10.0,
+          maxPostImpactGyroRmsRadPerSec: 4.0,
+          maxPostImpactAccelRmsMps2: 6.0,
         );
       case TapSensitivityPreset.balanced:
-        return const ImpactDetectorConfig();
+        return const ImpactDetectorConfig(
+          minPeakLinearAccelMps2: 5.5,
+          minJerkMps3: 220.0,
+          maxPreImpactGyroRmsRadPerSec: 6.5,
+          maxPreImpactGyroPeakRadPerSec: 12.0,
+          maxPreImpactAccelRmsMps2: 9.5,
+          maxDuringImpactGyroPeakRadPerSec: 15.0,
+          maxPostImpactGyroRmsRadPerSec: 6.0,
+          maxPostImpactAccelRmsMps2: 9.0,
+        );
       case TapSensitivityPreset.high:
         return const ImpactDetectorConfig(
-          minPeakLinearAccelMps2: 5.0,
-          minJerkMps3: 250.0,
+          minPeakLinearAccelMps2: 3.8,
+          minJerkMps3: 140.0,
+          maxPreImpactGyroRmsRadPerSec: 8.5,
+          maxPreImpactGyroPeakRadPerSec: 16.0,
+          maxPreImpactAccelRmsMps2: 12.0,
+          maxDuringImpactGyroPeakRadPerSec: 20.0,
+          maxPostImpactGyroRmsRadPerSec: 8.0,
+          maxPostImpactAccelRmsMps2: 11.0,
         );
     }
   }

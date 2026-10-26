@@ -22,6 +22,7 @@ import 'package:localsend_app/provider/security_provider.dart';
 import 'package:localsend_app/provider/selection/selected_receiving_files_provider.dart';
 import 'package:localsend_app/provider/selection/selected_sending_files_provider.dart';
 import 'package:localsend_app/provider/settings_provider.dart';
+import 'package:localsend_app/provider/tap_to_share/tap_transfer_state_machine.dart';
 import 'package:localsend_app/util/native/directories.dart';
 import 'package:localsend_app/util/native/platform_check.dart';
 import 'package:localsend_app/util/native/tray_helper.dart';
@@ -136,6 +137,10 @@ class ReceiveController {
     }
     if (server.getState().webUpload && settings.receiveViaLinkAutoAccept && server.getState().session?.message == null) {
       // The upload page (receive via link) is being served and requests should be accepted automatically.
+      quickSave = true;
+    }
+    if (server.ref.notifier(tapTransferStateMachineProvider).consumePreApprovedSender(senderFingerprint) &&
+        server.getState().session?.message == null) {
       quickSave = true;
     }
 

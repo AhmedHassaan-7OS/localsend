@@ -25,9 +25,27 @@ class ReceivedUdpTapPacket {
   });
 }
 
-/// Coordinates lightweight UDP packets (`tap_announce`, `clock_ping`, `clock_pong`) across LAN peers (`Spec 011`).
+/// Request received when a matched Receiver peer confirms receiving and asks the Sender to start the HTTP upload.
+class ReceivedTriggerSendRequest {
+  final String receiverFingerprint;
+  final InternetAddress receiverAddress;
+  final int receiverHttpPort;
+  final bool receiverHttps;
+  final String? receiverAlias;
+
+  const ReceivedTriggerSendRequest({
+    required this.receiverFingerprint,
+    required this.receiverAddress,
+    required this.receiverHttpPort,
+    required this.receiverHttps,
+    this.receiverAlias,
+  });
+}
+
+/// Coordinates lightweight UDP packets (`tap_announce`, `clock_ping`, `clock_pong`, `tap_trigger_send`) across LAN peers (`Spec 011`).
 ///
-/// Complies strictly with rule `R2.5`: operates in Dart without modifying LocalSend's Rust HTTP server.
+/// Mirrors Rust's multi-interface multicast & subnet broadcast architecture (`packages/core/src/multicast/socket.rs`)
+/// while complying strictly with rule `R2.5`.
 class TapUdpCoordinator {
   final String localFingerprint;
   final PeerClockEstimator clockEstimator;
@@ -35,8 +53,10 @@ class TapUdpCoordinator {
   final int Function() _nowUs;
 
   RawDatagramSocket? _socket;
+  final List<String> _discoveredLocalIpv4s = [];
   final StreamController<ReceivedUdpTapPacket> _announcementController = StreamController<ReceivedUdpTapPacket>.broadcast();
   final StreamController<PeerClockEstimate> _clockSyncController = StreamController<PeerClockEstimate>.broadcast();
+  final StreamController<ReceivedTriggerSendRequest> _triggerSendController = StreamController<ReceivedTriggerSendRequest>.broadcast();
 
   TapUdpCoordinator({
     required String localFingerprint,
@@ -54,8 +74,9 @@ class TapUdpCoordinator {
 
   Stream<ReceivedUdpTapPacket> get announcementStream => _announcementController.stream;
   Stream<PeerClockEstimate> get clockSyncStream => _clockSyncController.stream;
+  Stream<ReceivedTriggerSendRequest> get triggerSendStream => _triggerSendController.stream;
 
-  /// Starts the UDP listener socket and joins the multicast/broadcast group when supported.
+  /// Starts the UDP listener socket and joins the multicast group on every IPv4 network interface.
   Future<void> start({InternetAddress? bindAddress}) async {
     if (_socket != null) {
       return;
@@ -66,16 +87,43 @@ class TapUdpCoordinator {
       reuseAddress: true,
     );
     socket.broadcastEnabled = true;
+    socket.multicastLoopback = true;
+    socket.multicastHops = 1;
+
+    final multicastAddr = InternetAddress(kTapToShareMulticastGroup);
     try {
-      socket.joinMulticast(InternetAddress(kTapToShareMulticastGroup));
-    } catch (_) {
-      // Loopback or restricted interfaces may not support multicast join; unicast/broadcast still work.
+      socket.joinMulticast(multicastAddr);
+    } catch (_) {}
+
+    // Mirror `packages/core/src/multicast/socket.rs`: join multicast on every non-loopback IPv4 interface
+    // so Windows (with Hyper-V/WSL virtual adapters) and Android listen on the real Wi-Fi/LAN interface.
+    if (bindAddress == null || bindAddress == InternetAddress.anyIPv4) {
+      try {
+        final interfaces = await NetworkInterface.list(
+          includeLoopback: false,
+          type: InternetAddressType.IPv4,
+        );
+        _discoveredLocalIpv4s.clear();
+        for (final iface in interfaces) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback && addr.type == InternetAddressType.IPv4) {
+              _discoveredLocalIpv4s.add(addr.address);
+            }
+          }
+          try {
+            socket.joinMulticast(multicastAddr, iface);
+          } catch (_) {}
+        }
+      } catch (_) {}
     }
 
     socket.listen((event) {
       if (event == RawSocketEvent.read) {
-        final dg = socket.receive();
-        if (dg != null) {
+        while (true) {
+          final dg = socket.receive();
+          if (dg == null) {
+            break;
+          }
           _handleDatagram(dg);
         }
       }
@@ -98,13 +146,17 @@ class TapUdpCoordinator {
       'senderFingerprint': localFingerprint,
       't1Us': _nowUs(),
     });
-    socket.send(utf8.encode(payload), targetAddress, targetPort);
+    try {
+      socket.send(utf8.encode(payload), targetAddress, targetPort);
+    } catch (_) {}
   }
 
-  /// Broadcasts and unicasts a [PeerTapAnnouncement] to LAN peers (`AC-2`).
+  /// Broadcasts and unicasts a [PeerTapAnnouncement] to LAN peers (`AC-2`),
+  /// including directed `/24` subnet broadcasts for every local IPv4 interface.
   void broadcastTapAnnouncement(
     PeerTapAnnouncement announcement, {
     List<String> knownPeerIps = const [],
+    List<String> localIps = const [],
     int targetPort = kTapToShareDefaultUdpPort,
     bool includeSubnetBroadcast = true,
   }) {
@@ -119,6 +171,54 @@ class TapUdpCoordinator {
       }),
     );
 
+    _sendDatagramBurst(
+      socket: socket,
+      bytes: bytes,
+      knownPeerIps: knownPeerIps,
+      localIps: localIps,
+      targetPort: targetPort,
+      includeSubnetBroadcast: includeSubnetBroadcast,
+    );
+  }
+
+  /// Sends a direct UDP `tap_trigger_send` message to the matched Sender peer when the Receiver confirms.
+  void sendTriggerSend({
+    required String targetPeerIp,
+    int targetUdpPort = kTapToShareDefaultUdpPort,
+    required int localHttpPort,
+    required bool localHttps,
+    String? localAlias,
+  }) {
+    final socket = _socket;
+    if (socket == null) {
+      return;
+    }
+    final parsed = InternetAddress.tryParse(targetPeerIp.trim());
+    if (parsed == null) {
+      return;
+    }
+    final bytes = utf8.encode(
+      jsonEncode({
+        'type': 'tap_trigger_send',
+        'receiverFingerprint': localFingerprint,
+        'receiverHttpPort': localHttpPort,
+        'receiverHttps': localHttps,
+        if (localAlias != null) 'receiverAlias': localAlias,
+      }),
+    );
+    try {
+      socket.send(bytes, parsed, targetUdpPort);
+    } catch (_) {}
+  }
+
+  void _sendDatagramBurst({
+    required RawDatagramSocket socket,
+    required List<int> bytes,
+    required List<String> knownPeerIps,
+    required List<String> localIps,
+    required int targetPort,
+    required bool includeSubnetBroadcast,
+  }) {
     final sentTargets = <String>{};
     for (final rawIp in knownPeerIps) {
       final ip = rawIp.trim();
@@ -134,6 +234,22 @@ class TapUdpCoordinator {
     }
 
     if (includeSubnetBroadcast) {
+      final allLocalIps = <String>{..._discoveredLocalIpv4s, ...localIps};
+      for (final localIp in allLocalIps) {
+        final parts = localIp.trim().split('.');
+        if (parts.length == 4) {
+          final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+          if (sentTargets.add(subnetBroadcast)) {
+            final parsed = InternetAddress.tryParse(subnetBroadcast);
+            if (parsed != null) {
+              try {
+                socket.send(bytes, parsed, targetPort);
+              } catch (_) {}
+            }
+          }
+        }
+      }
+
       try {
         socket.send(bytes, InternetAddress(kTapToShareMulticastGroup), targetPort);
       } catch (_) {}
@@ -222,6 +338,25 @@ class TapUdpCoordinator {
           );
         }
       } catch (_) {}
+    } else if (type == 'tap_trigger_send') {
+      final receiverFp = (decoded['receiverFingerprint'] as String?)?.trim().toUpperCase() ?? '';
+      if (receiverFp.isEmpty || receiverFp == localFingerprint) {
+        return;
+      }
+      final httpPort = (decoded['receiverHttpPort'] as num?)?.toInt() ?? 53317;
+      final https = decoded['receiverHttps'] as bool? ?? true;
+      final alias = decoded['receiverAlias'] as String?;
+      if (!_triggerSendController.isClosed) {
+        _triggerSendController.add(
+          ReceivedTriggerSendRequest(
+            receiverFingerprint: receiverFp,
+            receiverAddress: dg.address,
+            receiverHttpPort: httpPort,
+            receiverHttps: https,
+            receiverAlias: alias,
+          ),
+        );
+      }
     }
   }
 
@@ -234,5 +369,6 @@ class TapUdpCoordinator {
     await stop();
     await _announcementController.close();
     await _clockSyncController.close();
+    await _triggerSendController.close();
   }
 }
